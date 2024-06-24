@@ -11,6 +11,7 @@ from scipy import stats # biblioteca para uso do T Student bicaudal
 import matplotlib.pyplot as plt # biblioteca apenas para a plotagem dos gráficos
 from math import * # para usar a biblioteca de raiz quadrada, equivalente a elevar a 1/2
 import random
+import numpy as np
 
 """## Funções Auxiliares"""
 
@@ -183,8 +184,10 @@ def medDisp(amostra, boxplot=False, dispersao=False):
     amostra.sort()
 
     tam_amostra = len(amostra)
+    meio = tam_amostra // 2
     media = mediaAritmetica(amostra)
-    mediana = escolhaMedia(amostra)["mediana"]
+    if tam_amostra % 2 == 0: mediana = (amostra[meio - 1] + amostra[meio]) / 2
+    else: mediana = amostra[meio]
 
     amplitude = amostra[-1] - amostra[0]
     variancia = (1 / (tam_amostra - 1)) * sum([(elem - media)**2 for elem in amostra])
@@ -229,10 +232,10 @@ def medDisp(amostra, boxplot=False, dispersao=False):
 
 def intervaloConfianca(amostra, media=None, pesos=None, nivel=0.95):
     tamanhoAmostra = len(amostra)
-    if not media: mediaAmostral = escolhaMedia(amostra)['aritmetica']
+    if not media: mediaAmostral = mediaAritmetica(amostra)
     else: mediaAmostral = media
-    variancia = (1 / (len(amostra) - 1)) * sum([(elem - media)**2 for elem in amostra])
-    desvio = sqrt(variancia)
+    variancia = (1 / (len(amostra) - 1)) * sum([(elem - mediaAmostral)**2 for elem in amostra])
+    desvio = math.sqrt(variancia)
 
     erroPadrao = desvio / tamanhoAmostra**(1/2)
     grausLib = tamanhoAmostra - 1
@@ -405,3 +408,383 @@ def variavel_aleatoria_exponencial(beta):
     U = random.random()
     X = -beta * log(1 - U)
     return X
+
+def regra_chow_robbins(dados, d, nivel_confianca=0.95):
+    
+    n = len(dados)
+    if n < 2:
+        return False, (0,0)
+    
+    media = mediaAritmetica(dados)
+    intervalo_confianca = intervaloConfianca(dados, media, nivel=nivel_confianca)
+    limite_inferior, limite_superior = intervalo_confianca
+    
+    largura_ic = limite_superior - limite_inferior
+    deve_parar = largura_ic < d
+    
+    return deve_parar, intervalo_confianca
+
+def regra_intervalo_confianca_relativo(data, gamma):
+    media = np.mean(data)
+    ic = intervaloConfianca(data, media)
+    h = (ic[1] - ic[0]) / 2
+    precision = h / media
+    return precision <= gamma, ic, h
+
+
+def conaway(amostra):
+    menor = float("inf")
+    maior = float("-inf")
+
+    for i, elem in enumerate(amostra):
+        if elem < menor:
+            menor = elem
+        if elem > maior:
+            maior = elem
+
+        transiente = False
+        for j in range(i + 1, len(amostra)):
+            if amostra[j] <= menor or amostra[j] >= maior:
+                transiente = True
+                break
+
+        if not transiente:
+            return i
+
+    return -1
+
+def fishman(amostra, k):
+    media = mediaAritmetica(amostra)
+    cruzou = 0
+
+    for i, elem in enumerate(amostra):
+        if i > 0 and elem > media and amostra[i - 1] < media: cruzou += 1
+        elif i > 0 and elem < media and amostra[i - 1] > media: cruzou += 1
+        
+        if cruzou == k: return len(amostra) - i, i
+
+    return 0, 0
+
+def mm1_v3(_lambda, _myu, n, d=None, gamma=None, conway=False, fish=None, pr = 0.05, filename="tempos_de_espera.txt", file=False):
+    # Inicialização de variáveis usando listas
+    chegadas = [variavel_aleatoria_exponencial(1 / _lambda) for _ in range(n)]
+    servicos = [variavel_aleatoria_exponencial(1 / _myu) for _ in range(n)]
+    
+    horaChegada = [sum(chegadas[:i+1]) for i in range(n)]
+    inicioServico = [0] * n
+    fimServico = [0] * n
+    espera = [0] * n
+    
+    # Primeira chegada e término de serviço
+    inicioServico[0] = horaChegada[0]
+    fimServico[0] = inicioServico[0] + servicos[0]
+    espera[0] = inicioServico[0] - horaChegada[0]
+    
+    # Simulação da fila M/M/1
+    for i in range(1, n):
+        inicioServico[i] = max(horaChegada[i], fimServico[i - 1])
+        fimServico[i] = inicioServico[i] + servicos[i]
+        espera[i] = inicioServico[i] - horaChegada[i]
+
+    # Processamento adicional caso d ou gamma sejam fornecidos
+    clientes = n
+    while True:
+        if d is not None:
+            parada, ic = regra_chow_robbins(espera[:clientes], d)
+            if parada:
+                break
+        elif gamma is not None:
+            parada, ic, h = regra_intervalo_confianca_relativo(espera[:clientes], gamma)
+            if parada:
+                break
+        elif conway:
+            pass
+        elif fish is not None:
+            pass
+        else:
+            break
+            
+        
+        # Adicionar mais 'n' clientes
+        if fish:
+            fishcar, fish_i = fishman(espera, fish)
+            n = n - fishcar
+
+        if conway:
+            conway_i = conaway(espera)
+            conwaycar = len(espera) - conway_i
+            n = n - conwaycar
+
+        novas_chegadas = [variavel_aleatoria_exponencial(1 / _lambda) for _ in range(n)]
+        novos_servicos = [variavel_aleatoria_exponencial(1 / _myu) for _ in range(n)]
+        
+        novas_horasChegada = [horaChegada[-1] + sum(novas_chegadas[:i+1]) for i in range(n)]
+        horaChegada.extend(novas_horasChegada)
+        inicioServico_novos = [0] * n
+        fimServico_novos = [0] * n
+        espera_novos = [0] * n
+
+        for i in range(n):
+            if i == 0:
+                inicioServico_novos[i] = max(novas_horasChegada[i], fimServico[-1])
+            else:
+                inicioServico_novos[i] = max(novas_horasChegada[i], fimServico_novos[i - 1])
+            fimServico_novos[i] = inicioServico_novos[i] + novos_servicos[i]
+            espera_novos[i] = inicioServico_novos[i] - novas_horasChegada[i]
+        
+        inicioServico.extend(inicioServico_novos)
+        fimServico.extend(fimServico_novos)
+        espera.extend(espera_novos)
+        
+        clientes += n
+
+        if fish is not None and fishcar != 0:
+            espera = espera[fish_i:fish_i + n + fishcar]
+            clientes = len(espera)
+            break
+
+        if conway and conway_i != -1:
+            espera = espera[conway_i:conway_i + n + conwaycar]
+            clientes = len(espera)
+            break
+
+    if file:
+        # Escrever os tempos de espera em um arquivo de texto
+        with open(filename, 'w') as f:
+            for e in espera[:clientes]:
+                f.write(f"{e}\n")
+    
+    
+    # Cálculo do tempo médio de espera
+    media = sum(espera[:clientes]) / clientes
+    confianca = intervaloConfianca(espera[:clientes], media)
+
+    # Valor Teórico
+    rho = _lambda / _myu
+    esperado = (rho / (_myu * (1 - rho)))
+
+    # Resultados
+    resultados = {
+        'medio': media,
+        'confianca': (confianca[0], confianca[1]),
+        'esperado': esperado,
+        'duracao': fimServico[clientes-1] - inicioServico[0],
+        'n': clientes,
+        'h': (confianca[1] - confianca[0]) / 2
+    }
+
+    if gamma is not None: resultados['h'] = h
+
+    return resultados
+
+def mm1_v4(_lambda, _myu, n, d=None, gamma=None, filename="tempos_de_espera.txt", file=False):
+    # Inicialização de variáveis usando Numpy
+    chegadas = np.array([variavel_aleatoria_exponencial(1 / _lambda) for _ in range(n)])
+    servicos = np.array([variavel_aleatoria_exponencial(1 / _myu) for _ in range(n)])
+    
+    horaChegada = np.cumsum(chegadas)
+    inicioServico = np.zeros(n)
+    fimServico = np.zeros(n)
+    espera = np.zeros(n)
+    
+    # Primeira chegada e término de serviço
+    inicioServico[0] = horaChegada[0]
+    fimServico[0] = inicioServico[0] + servicos[0]
+    espera[0] = inicioServico[0] - horaChegada[0]
+    
+    # Simulação da fila M/M/1
+    for i in range(1, n):
+        inicioServico[i] = max(horaChegada[i], fimServico[i - 1])
+        fimServico[i] = inicioServico[i] + servicos[i]
+        espera[i] = inicioServico[i] - horaChegada[i]
+
+    # Processamento adicional caso d ou gamma sejam fornecidos
+    clientes = n
+    while True:
+        if d is not None:
+            parada, ic = regra_chow_robbins(espera[:clientes], d)
+            if parada:
+                break
+        elif gamma is not None:
+            parada, ic, h = regra_intervalo_confianca_relativo(espera[:clientes], gamma)
+            if parada:
+                break
+        else:
+            break
+        
+        # Adicionar mais 'n' clientes
+        novas_chegadas = np.array([variavel_aleatoria_exponencial(1 / _lambda) for _ in range(n)])
+        novos_servicos = np.array([variavel_aleatoria_exponencial(1 / _myu) for _ in range(n)])
+        
+        novas_horasChegada = np.cumsum(novas_chegadas) + horaChegada[-1]
+        horaChegada = np.append(horaChegada, novas_horasChegada)
+        inicioServico_novos = np.zeros(n)
+        fimServico_novos = np.zeros(n)
+        espera_novos = np.zeros(n)
+
+        for i in range(n):
+            if i == 0:
+                inicioServico_novos[i] = max(novas_horasChegada[i], fimServico[-1])
+            else:
+                inicioServico_novos[i] = max(novas_horasChegada[i], fimServico_novos[i - 1])
+            fimServico_novos[i] = inicioServico_novos[i] + novos_servicos[i]
+            espera_novos[i] = inicioServico_novos[i] - novas_horasChegada[i]
+        
+        inicioServico = np.append(inicioServico, inicioServico_novos)
+        fimServico = np.append(fimServico, fimServico_novos)
+        espera = np.append(espera, espera_novos)
+        
+        clientes += n
+
+    if file:
+        # Escrever os tempos de espera em um arquivo de texto
+        np.savetxt(filename, espera[:clientes], fmt='%f')
+    
+    # Cálculo do tempo médio de espera
+    media = np.mean(espera[:clientes])
+    confianca = intervaloConfianca(espera[:clientes], media)
+
+    # Valor Teórico
+    rho = _lambda / _myu
+    esperado = (rho / (_myu * (1 - rho)))
+
+    # Resultados
+    resultados = {
+        'medio': media,
+        'confianca': (confianca[0], confianca[1]),
+        'esperado': esperado,
+        'duracao': fimServico[clientes-1] - inicioServico[0],
+        'n': clientes,
+        'h': (confianca[1] - confianca[0]) / 2
+    }
+
+    if gamma is not None: resultados['h'] = h
+
+    return resultados
+
+
+# def MSER_5Y(espera):
+#     n = len(espera)
+#     min_mse = float('inf')
+#     best_index = 0
+#     for i in range(n // 10, n // 2):
+#         subset = espera[i:]
+#         mean = np.mean(subset)
+#         mse = np.mean((subset - mean) ** 2)
+#         if mse < min_mse:
+#             min_mse = mse
+#             best_index = i
+#     print(best_index)
+#     return best_index
+
+def MSER_5Y(espera, K):
+    n = len(espera)
+    m = n // K
+    min_mse = float('inf')
+    ponto_truncagem = 0
+    for i in range(m, n // 2, m):
+        conjunto = espera[i:]
+        media = mediaAritmetica(conjunto)
+        mse = mediaAritmetica((conjunto - media) ** 2)
+        if mse < min_mse:
+            min_mse = mse
+            ponto_truncagem = i
+    # print(ponto_truncagem)
+    return ponto_truncagem
+
+def funcao_von_neumann(espera, K, beta):
+    n = len(espera)
+    m = n // K
+    W = np.array([mediaAritmetica(espera[j*m:(j+1)*m]) for j in range(K)])
+    W_bar = mediaAritmetica(W)
+    S2_W = np.sum((W - W_bar)**2) / (K - 1)
+    MSSD_W = np.sum((W[1:] - W[:-1])**2) / (K - 1)
+    C_v = 1 - (MSSD_W / (2 * S2_W))
+    # criterio de teste
+    test_statistic = C_v / np.sqrt((K - 2) / ((K**2) - 1))
+    
+    # valor critico
+    z_beta = stats.norm.ppf(1 - beta)
+    
+    # teste randomico
+    passou_no_teste = test_statistic <= z_beta
+    
+    return passou_no_teste
+
+def mm1_vMSER5Y(_lambda, _myu, n, gamma=0.05, K=10):
+    # Inicialização de variáveis usando Numpy
+    chegadas = np.array([variavel_aleatoria_exponencial(1 / _lambda) for _ in range(n)])
+    servicos = np.array([variavel_aleatoria_exponencial(1 / _myu) for _ in range(n)])
+    
+    horaChegada = np.cumsum(chegadas)
+    inicioServico = np.zeros(n)
+    fimServico = np.zeros(n)
+    espera = np.zeros(n)
+    
+    # Primeira chegada e término de serviço
+    inicioServico[0] = horaChegada[0]
+    fimServico[0] = inicioServico[0] + servicos[0]
+    espera[0] = inicioServico[0] - horaChegada[0]
+    
+    # Simulação da fila M/M/1
+    for i in range(1, n):
+        inicioServico[i] = max(horaChegada[i], fimServico[i - 1])
+        fimServico[i] = inicioServico[i] + servicos[i]
+        espera[i] = inicioServico[i] - horaChegada[i]
+
+    # Eliminação do transiente usando MSER-5Y com coleta adicional de dados
+    while True:
+        corte = MSER_5Y(espera,K)
+        # espera = espera[corte:]
+        
+        if funcao_von_neumann(espera, K, gamma):
+            # Aplicação da regra de parada com precisão relativa de 5%
+            clientes = len(espera)
+            parada, ic, h = regra_intervalo_confianca_relativo(espera, gamma)
+            if parada:
+                # print("antes corte", len(espera))
+                espera = espera[corte:]
+                # print("depois corte", len(espera))
+                break
+
+        # Adicionar mais 'n' clientes
+        novas_chegadas = np.array([variavel_aleatoria_exponencial(1/_lambda) for _ in range(n)])
+        novos_servicos = np.array([variavel_aleatoria_exponencial(1/_myu) for _ in range(n)])
+        
+        novas_horasChegada = np.cumsum(novas_chegadas) + horaChegada[-1]
+        horaChegada = np.append(horaChegada, novas_horasChegada)
+        inicioServico_novos = np.zeros(n)
+        fimServico_novos = np.zeros(n)
+        espera_novos = np.zeros(n)
+
+        for i in range(n):
+            if i == 0:
+                inicioServico_novos[i] = max(novas_horasChegada[i], fimServico[-1])
+            else:
+                inicioServico_novos[i] = max(novas_horasChegada[i], fimServico_novos[i - 1])
+            fimServico_novos[i] = inicioServico_novos[i] + novos_servicos[i]
+            espera_novos[i] = inicioServico_novos[i] - novas_horasChegada[i]
+        
+        inicioServico = np.append(inicioServico, inicioServico_novos)
+        fimServico = np.append(fimServico, fimServico_novos)
+        espera = np.append(espera, espera_novos)
+
+    # Cálculo do tempo médio de espera
+    media = mediaAritmetica(espera)
+    confianca = intervaloConfianca(espera, media)
+
+    # Valor Teórico
+    rho = _lambda / _myu
+    esperado = (rho / (_myu * (1 - rho)))
+
+    # Resultados
+    resultados = {
+        'medio': media,
+        'confianca': (confianca[0], confianca[1]),
+        'esperado': esperado,
+        'duracao': fimServico[clientes-1] - inicioServico[0],
+        'n': clientes,
+        'h': h
+    }
+
+    return resultados
